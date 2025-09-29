@@ -56,7 +56,6 @@ $result = $conn->query($sql);
     <h4 class="text-center mb-4">📘 ZTA Student</h4>
     <a href="student_dashboard.php">🏠 Dashboard</a>
     <a href="my_progress.php">📊 My Progress</a>
-    <a href="student_dashboard.php">📚 Modules</a>
     <a class="nav-link" href="glossary.php">📖 Glossary</a>
     <a href="logout.php">🚪 Logout</a>
   </div>

@@ -2,174 +2,121 @@
 session_start();
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'student') {
     header("Location: index.php");
-    exit;
-}
-if (!isset($_SESSION['user_id'])) {
-    die("Error: User not logged in.");
+    exit();
 }
 
-$host = "localhost";
-$user = "root";
-$pass = "";
-$db   = "zta_app";
-$conn = new mysqli($host, $user, $pass, $db);
-if ($conn->connect_error) {
-    die("Connection failed: " . $conn->connect_error);
-}
+include 'db_connect.php';
 
-// Accept either 'answer' or 'answers' (some forms used one or the other)
-$postedAnswers = $_POST['answer'] ?? $_POST['answers'] ?? [];
-$module_id = isset($_POST['module_id']) ? intval($_POST['module_id']) : 0;
+$module_id = $_GET['module_id'] ?? null;
 $user_id = $_SESSION['user_id'];
 
-if ($module_id <= 0) {
-    die("Invalid module.");
-}
+if (!$module_id) die("Module not specified");
 
-// Fetch all quiz questions for this module
-$qStmt = $conn->prepare("SELECT quiz_id, question, correct_option FROM quizzes WHERE module_id = ?");
-$qStmt->bind_param("i", $module_id);
-$qStmt->execute();
-$qRes = $qStmt->get_result();
+// Fetch module title
+$stmt = $conn->prepare("SELECT title FROM modules WHERE module_id = ?");
+$stmt->bind_param("i", $module_id);
+$stmt->execute();
+$module = $stmt->get_result()->fetch_assoc();
 
-$quizzes = [];
-while ($q = $qRes->fetch_assoc()) {
-    $quizzes[$q['quiz_id']] = [
-        'question' => $q['question'],
-        'correct'  => $q['correct_option']
-    ];
-}
-$qStmt->close();
+// Fetch questions and user answers
+$sql = "
+SELECT q.quiz_id, q.question, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option,
+       qr.selected_option
+FROM quizzes q
+LEFT JOIN (SELECT quiz_id, selected_option FROM quiz_results WHERE user_id = ?) qr
+ON q.quiz_id = qr.quiz_id
+WHERE q.module_id = ?
+ORDER BY q.quiz_id ASC
+";
 
-$totalQuestions = count($quizzes);
-$totalCorrect = 0;
-$feedback = [];
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("ii", $user_id, $module_id);
+$stmt->execute();
+$result = $stmt->get_result();
+$questions = $result->fetch_all(MYSQLI_ASSOC);
 
-// If there are no quiz questions, show friendly message
-if ($totalQuestions === 0) {
-    // nothing to grade — redirect back or show message
-    header("Location: view_module.php?id=" . $module_id . "&msg=no_quiz");
-    exit;
-}
+// Compute statistics
+$total_questions = count($questions);
+$correct_answers = 0;
+$option_map = ['A' => 'option_a', 'B' => 'option_b', 'C' => 'option_c', 'D' => 'option_d'];
 
-// Insert each result (one row per question - keeps history of attempts)
-foreach ($quizzes as $quiz_id => $qinfo) {
-    // selected option from form, or null if not answered
-    $selected = array_key_exists($quiz_id, $postedAnswers) ? $postedAnswers[$quiz_id] : null;
-
-    $is_correct = ($selected !== null && $selected === $qinfo['correct']) ? 1 : 0;
-    if ($is_correct) $totalCorrect++;
-
-    // Save result. Handle NULL selected safely by inserting NULL explicitly when needed.
-    if ($selected === null) {
-        $ins = $conn->prepare("INSERT INTO quiz_results (user_id, quiz_id, selected_option, score) VALUES (?, ?, NULL, ?)");
-        $ins->bind_param("iii", $user_id, $quiz_id, $is_correct);
-    } else {
-        $ins = $conn->prepare("INSERT INTO quiz_results (user_id, quiz_id, selected_option, score) VALUES (?, ?, ?, ?)");
-        $ins->bind_param("iisi", $user_id, $quiz_id, $selected, $is_correct);
+foreach ($questions as $q) {
+    if ($q['selected_option'] === $q['correct_option']) {
+        $correct_answers++;
     }
-    $ins->execute();
-    $ins->close();
-
-    $feedback[] = [
-        'quiz_id' => $quiz_id,
-        'question' => $qinfo['question'],
-        'selected' => $selected,
-        'correct' => $qinfo['correct'],
-        'is_correct' => $is_correct
-    ];
 }
 
-// Mark module as completed in progress table
-$updateProgress = $conn->prepare("
-    INSERT INTO progress (user_id, module_id, status, last_accessed) 
-    VALUES (?, ?, 'completed', NOW())
-    ON DUPLICATE KEY UPDATE status='completed', last_accessed=NOW()
-");
-$updateProgress->bind_param("ii", $user_id, $module_id);
-$updateProgress->execute();
-$updateProgress->close();
-
-$percentage = $totalQuestions > 0 ? round(($totalCorrect / $totalQuestions) * 100, 2) : 0;
-$conn->close();
+$percentage = ($total_questions > 0) ? round(($correct_answers / $total_questions) * 100, 1) : 0;
 ?>
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>Quiz Results | ZTA App</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    body { font-family: 'Segoe UI', sans-serif; background: #f8f9fa; }
-    .result-card { border: none; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.08); }
-    .result-header { background: linear-gradient(135deg,#f6c23e,#d39e00); color: white; padding: 20px; border-radius: 12px 12px 0 0; }
-    .result-body { padding: 24px; background: white; }
-    .result-footer { padding: 16px; background: #f1f3f5; border-top: 1px solid #dee2e6; display:flex; justify-content:space-between; }
-    .correct { color: #0f5132; font-weight:600; }
-    .wrong { color: #842029; font-weight:600; }
-  </style>
+<meta charset="UTF-8">
+<title><?php echo htmlspecialchars($module['title']); ?> - Quiz Results</title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+<style>
+.correct { background-color: #d4edda; }
+.incorrect { background-color: #f8d7da; }
+.notanswered { color: #6c757d; }
+</style>
 </head>
-<body>
-  <div class="container py-5">
-    <div class="result-card">
-      <div class="result-header">
-        <h3 class="mb-0">Quiz Results</h3>
-      </div>
-      <div class="result-body">
-        <div class="row mb-3">
-          <div class="col-md-4">
-            <div class="p-3 bg-light rounded">
-              <strong>Total Questions</strong>
-              <div class="fs-4"><?php echo $totalQuestions; ?></div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="p-3 bg-light rounded">
-              <strong>Correct Answers</strong>
-              <div class="fs-4"><?php echo $totalCorrect; ?></div>
-            </div>
-          </div>
-          <div class="col-md-4">
-            <div class="p-3 bg-light rounded">
-              <strong>Score</strong>
-              <div class="fs-4"><?php echo $totalCorrect . " / " . $totalQuestions . " (" . $percentage . "%)"; ?></div>
-            </div>
-          </div>
-        </div>
+<body class="bg-light">
+<div class="container mt-5">
 
-        <h5>Question Feedback</h5>
-        <ul class="list-group">
-          <?php foreach ($feedback as $f): ?>
-            <li class="list-group-item">
-              <div class="d-flex justify-content-between">
-                <div>
-                  <div class="fw-semibold">Q<?php echo $f['quiz_id']; ?>: <?php echo htmlspecialchars($f['question']); ?></div>
-                  <small>Your answer: <?php echo $f['selected'] ?? '<em>Not answered</em>'; ?></small>
-                  <br>
-                  <small>Correct answer: <span class="fw-bold"><?php echo $f['correct']; ?></span></small>
-                </div>
-                <div class="text-end">
-                  <?php if ($f['is_correct']): ?>
-                    <span class="badge bg-success">Correct</span>
-                  <?php else: ?>
-                    <span class="badge bg-danger">Wrong</span>
-                  <?php endif; ?>
-                </div>
-              </div>
-            </li>
-          <?php endforeach; ?>
-        </ul>
-      </div>
+<h2><?php echo htmlspecialchars($module['title']); ?> - Quiz Results</h2>
+<a href="student_dashboard.php" class="btn btn-secondary mb-3">⬅ Back to Dashboard</a>
 
-      <div class="result-footer">
-        <div>
-          <a href="view_module.php?id=<?php echo $module_id; ?>" class="btn btn-outline-secondary">⬅ Back to Module</a>
-        </div>
-        <div>
-          <a href="student_dashboard.php" class="btn btn-primary">Back to Dashboard</a>
-        </div>
-      </div>
-    </div>
-  </div>
+<!-- Quiz Statistics -->
+<div class="mb-3">
+    <h5>Quiz Summary:</h5>
+    <p>Total Questions: <b><?php echo $total_questions; ?></b></p>
+    <p>Correct Answers: <b><?php echo $correct_answers; ?></b></p>
+    <p>Score Percentage: <b><?php echo $percentage; ?>%</b></p>
+</div>
+
+<!-- Results Table -->
+<table class="table table-bordered table-hover">
+    <thead class="table-dark">
+        <tr>
+            <th>#</th>
+            <th>Question</th>
+            <th>Your Answer</th>
+            <th>Correct Answer</th>
+            <th>Status</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php foreach ($questions as $i => $q): 
+            $user_ans = $q['selected_option'];
+            $correct_ans = $q['correct_option'];
+
+            if (!$user_ans) {
+                $status = 'Not Answered';
+                $row_class = 'notanswered';
+                $display_user = '<span class="text-muted">Not Answered</span>';
+            } elseif ($user_ans === $correct_ans) {
+                $status = 'Correct';
+                $row_class = 'correct';
+                $display_user = $user_ans . '. ' . htmlspecialchars($q[$option_map[$user_ans]]);
+            } else {
+                $status = 'Incorrect';
+                $row_class = 'incorrect';
+                $display_user = $user_ans . '. ' . htmlspecialchars($q[$option_map[$user_ans]]);
+            }
+
+            $display_correct = $correct_ans . '. ' . htmlspecialchars($q[$option_map[$correct_ans]]);
+        ?>
+        <tr class="<?php echo $row_class; ?>">
+            <td><?php echo $i+1; ?></td>
+            <td><?php echo htmlspecialchars($q['question']); ?></td>
+            <td><?php echo $display_user; ?></td>
+            <td><?php echo $display_correct; ?></td>
+            <td><?php echo $status; ?></td>
+        </tr>
+        <?php endforeach; ?>
+    </tbody>
+</table>
+</div>
 </body>
 </html>

@@ -217,7 +217,7 @@ $conn->close();
   <!-- Contact -->
   <section class="mb-5" id="contact">
     <h3>Contact</h3>
-    <p>Email: <a href="mailto:support@ztacademy.com">support@ztacademy.com</a></p>
+    <p>Email: <a href="mailto:support@ztacademy.com">sddungu@kabarak.ac.ke</a></p>
   </section>
 </div>
 
