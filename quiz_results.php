@@ -2,121 +2,132 @@
 session_start();
 if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'student') {
     header("Location: index.php");
-    exit();
+    exit;
 }
 
-include 'db_connect.php';
+$host = "localhost";
+$user = "root";
+$pass = "";
+$db   = "zta_app";
+$conn = new mysqli($host, $user, $pass, $db);
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
 
-$module_id = $_GET['module_id'] ?? null;
-$user_id = $_SESSION['user_id'];
-
-if (!$module_id) die("Module not specified");
+if (!isset($_GET['module_id'])) {
+    die("Error: Module not specified.");
+}
+$module_id = intval($_GET['module_id']);
+$user_id   = $_SESSION['user_id'];
 
 // Fetch module title
 $stmt = $conn->prepare("SELECT title FROM modules WHERE module_id = ?");
 $stmt->bind_param("i", $module_id);
 $stmt->execute();
-$module = $stmt->get_result()->fetch_assoc();
+$module_result = $stmt->get_result();
+$module = $module_result->fetch_assoc();
 
-// Fetch questions and user answers
-$sql = "
-SELECT q.quiz_id, q.question, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option,
-       qr.selected_option
-FROM quizzes q
-LEFT JOIN (SELECT quiz_id, selected_option FROM quiz_results WHERE user_id = ?) qr
-ON q.quiz_id = qr.quiz_id
-WHERE q.module_id = ?
-ORDER BY q.quiz_id ASC
-";
-
+// Fetch quiz questions with answers
+$sql = "SELECT q.quiz_id, q.question, q.option_a, q.option_b, q.option_c, q.option_d, q.correct_option, r.selected_option
+        FROM quizzes q
+        LEFT JOIN quiz_results r 
+        ON q.quiz_id = r.quiz_id AND r.user_id = ?
+        WHERE q.module_id = ?";
 $stmt = $conn->prepare($sql);
 $stmt->bind_param("ii", $user_id, $module_id);
 $stmt->execute();
 $result = $stmt->get_result();
-$questions = $result->fetch_all(MYSQLI_ASSOC);
 
-// Compute statistics
-$total_questions = count($questions);
+$total_questions = $result->num_rows;
 $correct_answers = 0;
-$option_map = ['A' => 'option_a', 'B' => 'option_b', 'C' => 'option_c', 'D' => 'option_d'];
+$feedback = [];
 
-foreach ($questions as $q) {
-    if ($q['selected_option'] === $q['correct_option']) {
+while ($row = $result->fetch_assoc()) {
+    $user_answer = $row['selected_option'];
+    $correct = $row['correct_option'];
+    $is_correct = ($user_answer === $correct);
+
+    if ($is_correct) {
         $correct_answers++;
     }
+
+    $feedback[] = [
+        'question' => $row['question'],
+        'user_answer' => $user_answer,
+        'correct_answer' => $correct,
+        'is_correct' => $is_correct
+    ];
 }
 
-$percentage = ($total_questions > 0) ? round(($correct_answers / $total_questions) * 100, 1) : 0;
+$score = ($total_questions > 0) ? round(($correct_answers / $total_questions) * 100) : 0;
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title><?php echo htmlspecialchars($module['title']); ?> - Quiz Results</title>
-<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-<style>
-.correct { background-color: #d4edda; }
-.incorrect { background-color: #f8d7da; }
-.notanswered { color: #6c757d; }
-</style>
+  <meta charset="UTF-8">
+  <title>Quiz Results - <?php echo htmlspecialchars($module['title']); ?></title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body class="bg-light">
-<div class="container mt-5">
+  <div class="container py-5">
+    <div class="card shadow-lg">
+      <div class="card-header bg-primary text-white">
+        <h3 class="mb-0">Quiz Results: <?php echo htmlspecialchars($module['title']); ?></h3>
+      </div>
+      <div class="card-body">
+        <!-- Summary -->
+        <div class="row text-center mb-4">
+          <div class="col-md-4">
+            <h5>Total Questions</h5>
+            <p class="fw-bold"><?php echo $total_questions; ?></p>
+          </div>
+          <div class="col-md-4">
+            <h5>Correct Answers</h5>
+            <p class="fw-bold text-success"><?php echo $correct_answers; ?></p>
+          </div>
+          <div class="col-md-4">
+            <h5>Score</h5>
+            <p class="fw-bold"><?php echo "$correct_answers / $total_questions ($score%)"; ?></p>
+          </div>
+        </div>
 
-<h2><?php echo htmlspecialchars($module['title']); ?> - Quiz Results</h2>
-<a href="student_dashboard.php" class="btn btn-secondary mb-3">⬅ Back to Dashboard</a>
+        <!-- Progress Bar -->
+        <div class="progress mb-4" style="height: 25px;">
+          <div class="progress-bar <?php echo ($score >= 50) ? 'bg-success' : 'bg-danger'; ?>" 
+               role="progressbar" 
+               style="width: <?php echo $score; ?>%;">
+            <?php echo $score; ?>%
+          </div>
+        </div>
 
-<!-- Quiz Statistics -->
-<div class="mb-3">
-    <h5>Quiz Summary:</h5>
-    <p>Total Questions: <b><?php echo $total_questions; ?></b></p>
-    <p>Correct Answers: <b><?php echo $correct_answers; ?></b></p>
-    <p>Score Percentage: <b><?php echo $percentage; ?>%</b></p>
-</div>
+        <!-- Feedback -->
+        <h5 class="mb-3">Question Feedback</h5>
+        <?php foreach ($feedback as $i => $f): ?>
+          <div class="border rounded p-3 mb-3 <?php echo $f['is_correct'] ? 'bg-light' : 'bg-white'; ?>">
+            <strong>Q<?php echo $i+1; ?>: <?php echo htmlspecialchars($f['question']); ?></strong><br>
+            
+            <span>Your answer: 
+              <?php if ($f['user_answer']): ?>
+                <?php if ($f['is_correct']): ?>
+                  <span class="text-success fw-bold"><?php echo $f['user_answer']; ?> (Correct)</span>
+                <?php else: ?>
+                  <span class="text-danger fw-bold"><?php echo $f['user_answer']; ?> (Wrong)</span>
+                <?php endif; ?>
+              <?php else: ?>
+                <span class="text-muted">Not answered</span>
+              <?php endif; ?>
+            </span><br>
 
-<!-- Results Table -->
-<table class="table table-bordered table-hover">
-    <thead class="table-dark">
-        <tr>
-            <th>#</th>
-            <th>Question</th>
-            <th>Your Answer</th>
-            <th>Correct Answer</th>
-            <th>Status</th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php foreach ($questions as $i => $q): 
-            $user_ans = $q['selected_option'];
-            $correct_ans = $q['correct_option'];
-
-            if (!$user_ans) {
-                $status = 'Not Answered';
-                $row_class = 'notanswered';
-                $display_user = '<span class="text-muted">Not Answered</span>';
-            } elseif ($user_ans === $correct_ans) {
-                $status = 'Correct';
-                $row_class = 'correct';
-                $display_user = $user_ans . '. ' . htmlspecialchars($q[$option_map[$user_ans]]);
-            } else {
-                $status = 'Incorrect';
-                $row_class = 'incorrect';
-                $display_user = $user_ans . '. ' . htmlspecialchars($q[$option_map[$user_ans]]);
-            }
-
-            $display_correct = $correct_ans . '. ' . htmlspecialchars($q[$option_map[$correct_ans]]);
-        ?>
-        <tr class="<?php echo $row_class; ?>">
-            <td><?php echo $i+1; ?></td>
-            <td><?php echo htmlspecialchars($q['question']); ?></td>
-            <td><?php echo $display_user; ?></td>
-            <td><?php echo $display_correct; ?></td>
-            <td><?php echo $status; ?></td>
-        </tr>
+            <span>Correct answer: <span class="fw-bold text-primary"><?php echo $f['correct_answer']; ?></span></span>
+          </div>
         <?php endforeach; ?>
-    </tbody>
-</table>
-</div>
+
+        <!-- Back Button -->
+        <div class="text-end">
+          <a href="student_dashboard.php" class="btn btn-secondary">⬅ Back to Dashboard</a>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
