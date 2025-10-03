@@ -5,14 +5,14 @@ if (!isset($_SESSION['role']) || $_SESSION['role'] !== 'student') {
     exit;
 }
 
-// Database connection
+// DB connection
 $host = "localhost";
 $user = "root";
 $pass = "";
 $db   = "zta_app";
 $conn = new mysqli($host, $user, $pass, $db);
 if ($conn->connect_error) {
-    die("Database connection failed: " . $conn->connect_error);
+    die("Connection failed: " . $conn->connect_error);
 }
 
 // Fetch modules
@@ -185,6 +185,9 @@ $result = $conn->query($sql);
         </a>
         <a href="my_progress.php">
             <i class="fas fa-chart-line"></i>My Progress
+        </a>
+        <a href="resources.php">
+            <i class="fas fa-folder-open"></i>Resources
         </a>
         <a href="glossary.php">
             <i class="fas fa-book"></i>Glossary
