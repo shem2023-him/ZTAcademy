@@ -15,9 +15,76 @@ if ($conn->connect_error) {
     die("Connection failed: " . $conn->connect_error);
 }
 
+$user_id = $_SESSION['user_id'];
+
 // Fetch modules
 $sql = "SELECT module_id, title, description FROM modules ORDER BY created_at DESC";
 $result = $conn->query($sql);
+
+// Fetch learning statistics
+$stats = [];
+$progress_sql = "
+    SELECT 
+        COUNT(DISTINCT module_id) as total_modules,
+        COUNT(DISTINCT CASE WHEN status = 'completed' THEN module_id END) as completed_modules,
+        COUNT(DISTINCT CASE WHEN status = 'in_progress' THEN module_id END) as in_progress_modules,
+        COALESCE(SUM(time_spent_minutes), 0) as total_time_spent,
+        AVG(CASE WHEN score IS NOT NULL THEN score END) as avg_score,
+        MAX(last_accessed) as last_study_date
+    FROM user_progress 
+    WHERE user_id = ?
+";
+$stmt = $conn->prepare($progress_sql);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$stats_result = $stmt->get_result();
+$stats = $stats_result->fetch_assoc();
+$stmt->close();
+
+// Calculate progress percentage
+$stats['completion_rate'] = $stats['total_modules'] > 0 ? 
+    round(($stats['completed_modules'] / $stats['total_modules']) * 100) : 0;
+
+// Fetch recent activity
+$activity_sql = "
+    SELECT m.title, up.last_accessed, up.status, up.score
+    FROM user_progress up
+    JOIN modules m ON up.module_id = m.module_id
+    WHERE up.user_id = ?
+    ORDER BY up.last_accessed DESC
+    LIMIT 3
+";
+$stmt = $conn->prepare($activity_sql);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$activity_result = $stmt->get_result();
+$recent_activity = $activity_result->fetch_all(MYSQLI_ASSOC);
+$stmt->close();
+
+// Calculate study streak (simplified version)
+$streak_sql = "
+    SELECT COUNT(DISTINCT DATE(last_accessed)) as streak_days
+    FROM user_progress 
+    WHERE user_id = ? 
+    AND last_accessed >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+";
+$stmt = $conn->prepare($streak_sql);
+$stmt->bind_param("i", $user_id);
+$stmt->execute();
+$streak_result = $stmt->get_result();
+$streak_data = $streak_result->fetch_assoc();
+$stats['study_streak'] = $streak_data['streak_days'] ?? 0;
+$stmt->close();
+
+// Handle cases where no progress data exists
+if (!$stats['total_modules']) {
+    $stats['completion_rate'] = 0;
+    $stats['completed_modules'] = 0;
+    $stats['in_progress_modules'] = 0;
+    $stats['total_time_spent'] = 0;
+    $stats['avg_score'] = 0;
+    $stats['study_streak'] = 0;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -106,7 +173,106 @@ $result = $conn->query($sql);
             font-size: 1.1em;
         }
         
-        /* Cards */
+        /* Statistics Cards */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            border-top: 4px solid;
+            transition: all 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.15);
+        }
+        .stat-card.completion { border-color: #28a745; }
+        .stat-card.time { border-color: #17a2b8; }
+        .stat-card.score { border-color: #ffc107; }
+        .stat-card.streak { border-color: #dc3545; }
+        
+        .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5em;
+            margin-bottom: 15px;
+        }
+        .stat-icon.completion { background: rgba(40, 167, 69, 0.1); color: #28a745; }
+        .stat-icon.time { background: rgba(23, 162, 184, 0.1); color: #17a2b8; }
+        .stat-icon.score { background: rgba(255, 193, 7, 0.1); color: #ffc107; }
+        .stat-icon.streak { background: rgba(220, 53, 69, 0.1); color: #dc3545; }
+        
+        .stat-value {
+            font-size: 2em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+        .stat-label {
+            color: #6c757d;
+            font-weight: 500;
+        }
+        
+        /* Progress Bar */
+        .progress {
+            height: 8px;
+            border-radius: 10px;
+            margin-top: 10px;
+        }
+        
+        /* Activity Section */
+        .activity-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        .activity-item {
+            display: flex;
+            align-items: center;
+            padding: 15px 0;
+            border-bottom: 1px solid #f1f3f4;
+        }
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+        .activity-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 15px;
+            font-size: 1.1em;
+        }
+        .activity-icon.completed { background: rgba(40, 167, 69, 0.1); color: #28a745; }
+        .activity-icon.in-progress { background: rgba(13, 110, 253, 0.1); color: #0d6efd; }
+        .activity-icon.new { background: rgba(108, 117, 125, 0.1); color: #6c757d; }
+        
+        .activity-content {
+            flex: 1;
+        }
+        .activity-title {
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .activity-meta {
+            color: #6c757d;
+            font-size: 0.9em;
+        }
+        
+        /* Module Cards */
         .module-card {
             border: none;
             border-radius: 12px;
@@ -168,6 +334,9 @@ $result = $conn->query($sql);
             .content {
                 margin-left: 0;
             }
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -205,7 +374,7 @@ $result = $conn->query($sql);
         <div class="row align-items-center">
             <div class="col">
                 <h1 class="h3 mb-2">Welcome back, <?php echo htmlspecialchars($_SESSION['username']); ?>! 👋</h1>
-                <p class="welcome-text mb-0">Select a module below to continue your Zero Trust learning journey.</p>
+                <p class="welcome-text mb-0">Here's your learning progress and available modules.</p>
             </div>
             <div class="col-auto">
                 <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" 
@@ -216,7 +385,80 @@ $result = $conn->query($sql);
         </div>
     </div>
 
-    <!-- Modules Grid -->
+    <!-- Learning Statistics -->
+    <div class="stats-grid">
+        <div class="stat-card completion">
+            <div class="stat-icon completion">
+                <i class="fas fa-tasks"></i>
+            </div>
+            <div class="stat-value"><?php echo $stats['completion_rate']; ?>%</div>
+            <div class="stat-label">Course Completion</div>
+            <div class="progress">
+                <div class="progress-bar bg-success" style="width: <?php echo $stats['completion_rate']; ?>%"></div>
+            </div>
+        </div>
+        
+        <div class="stat-card time">
+            <div class="stat-icon time">
+                <i class="fas fa-clock"></i>
+            </div>
+            <div class="stat-value"><?php echo $stats['total_time_spent']; ?>m</div>
+            <div class="stat-label">Total Study Time</div>
+            <small class="text-muted">Time spent learning</small>
+        </div>
+        
+        <div class="stat-card score">
+            <div class="stat-icon score">
+                <i class="fas fa-star"></i>
+            </div>
+            <div class="stat-value">
+                <?php echo $stats['avg_score'] ? number_format($stats['avg_score'], 1) : '0.0'; ?>
+            </div>
+            <div class="stat-label">Average Score</div>
+            <small class="text-muted">Based on completed assessments</small>
+        </div>
+        
+        <div class="stat-card streak">
+            <div class="stat-icon streak">
+                <i class="fas fa-fire"></i>
+            </div>
+            <div class="stat-value"><?php echo $stats['study_streak']; ?>d</div>
+            <div class="stat-label">Study Streak</div>
+            <small class="text-muted">Consecutive learning days</small>
+        </div>
+    </div>
+
+    <!-- Recent Activity -->
+    <div class="activity-card">
+        <h5 class="mb-4"><i class="fas fa-history me-2"></i>Recent Activity</h5>
+        <?php if (!empty($recent_activity)): ?>
+            <?php foreach ($recent_activity as $activity): ?>
+                <div class="activity-item">
+                    <div class="activity-icon <?php echo $activity['status']; ?>">
+                        <i class="fas fa-<?php echo $activity['status'] === 'completed' ? 'check-circle' : 'play-circle'; ?>"></i>
+                    </div>
+                    <div class="activity-content">
+                        <div class="activity-title"><?php echo htmlspecialchars($activity['title']); ?></div>
+                        <div class="activity-meta">
+                            <?php 
+                            echo ucfirst(str_replace('_', ' ', $activity['status']));
+                            if ($activity['score']) echo " • Score: {$activity['score']}%";
+                            if ($activity['last_accessed']) echo " • " . date('M j, g:i A', strtotime($activity['last_accessed']));
+                            ?>
+                        </div>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        <?php else: ?>
+            <div class="text-center py-4 text-muted">
+                <i class="fas fa-inbox fa-2x mb-3"></i>
+                <p>No recent activity. Start learning to see your progress here!</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Available Modules -->
+    <h4 class="mb-4"><i class="fas fa-book-open me-2"></i>Available Modules</h4>
     <div class="row g-4">
         <?php if ($result->num_rows > 0): ?>
             <?php while ($module = $result->fetch_assoc()): ?>
