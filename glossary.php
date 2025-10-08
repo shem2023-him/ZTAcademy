@@ -274,7 +274,7 @@ $result = $conn->query($sql);
         <div class="row align-items-center">
             <div class="col">
                 <h1 class="h3 mb-2">Cybersecurity & Zero Trust Glossary 📚</h1>
-                <p class="text-muted mb-0">Explore essential terms and definitions for mastering Zero Trust Architecture.</p>
+                <p class="text-muted mb-0"><b>Explore essential terms and definitions for mastering Zero Trust Architecture.</b></p>
             </div>
             <div class="col-auto">
                 <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" 
